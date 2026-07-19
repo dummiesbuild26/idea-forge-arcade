@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Idea Forge Arcade</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #0a0d12; color: #e6edf3; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 24px; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 100px; background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; padding: 12px; font-size: 16px; }
+  button { margin-top: 12px; width: 100%; padding: 14px; background: #238636; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; }
+  button:disabled { background: #30363d; }
+  #status { margin-top: 16px; font-size: 14px; color: #8b949e; white-space: pre-wrap; }
+  h2 { margin-top: 40px; font-size: 18px; border-top: 1px solid #30363d; padding-top: 24px; }
+  ul { list-style: none; padding: 0; }
+  li { margin-bottom: 10px; }
+  li a { display: block; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; color: #58a6ff; text-decoration: none; }
+  li a:hover { border-color: #58a6ff; }
+  li { position: relative; }
+  .delete-btn { display: none; position: absolute; top: 8px; right: 8px; width: auto; margin: 0; padding: 6px 10px; font-size: 12px; background: #da3633; z-index: 5; }
+  .idea-text { display: block; color: #8b949e; font-size: 13px; margin-top: 4px; }
+  .usage-box { margin-top: 16px; padding: 12px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; font-size: 13px; color: #8b949e; }
+  .usage-box strong { color: #e6edf3; }
+  .login-row { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .login-btn { width: auto; padding: 8px 14px; font-size: 13px; margin-top: 0; background: #30363d; }
+  .login-btn.logged-in { background: #1f6feb; }
+</style>
+</head>
+<body>
+  <h1>💡 Idea Forge Arcade</h1>
+  <p>Describe a small game or fun toy. It'll be built and deployed automatically.</p>
+  <textarea id="idea" placeholder="e.g. A neon snake game where the snake gets faster every time it eats"></textarea>
+  <button id="go" onclick="submitIdea()">Build it</button>
+  <div id="status"></div>
+
+  <div class="usage-box">
+    <div id="usage-text">Loading usage...</div>
+    <div><strong>Limit:</strong> 2 free games per device per 24 hours. Know the password? Log in below for unlimited access.</div>
+    <div class="login-row">
+      <button class="login-btn" id="login-btn" onclick="doLogin()">Login</button>
+      <span id="login-status" style="font-size:13px;"></span>
+    </div>
+  </div>
+
+  <h2>Games so far</h2>
+  <ul id="games-list">
+<!-- GAMES_LIST_START -->
+<!-- GAMES_LIST_END -->
+  </ul>
+
+<script>
+const WORKER_URL = "https://idea-forge.lewiseedle7.workers.dev";
+const TOKEN_KEY = 'forge_token';
+
+function getToken() { return localStorage.getItem(TOKEN_KEY); }
+
+function authHeaders() {
+  const t = getToken();
+  return t ? { 'Authorization': 'Bearer ' + t } : {};
+}
+
+async function refreshUsage() {
+  try {
+    const res = await fetch(WORKER_URL + '/usage', { headers: authHeaders() });
+    const data = await res.json();
+    const usageText = document.getElementById('usage-text');
+    const loginBtn = document.getElementById('login-btn');
+    if (data.unlimited) {
+      usageText.innerHTML = '<strong>Unlimited</strong> — logged in.';
+      loginBtn.textContent = 'Logged in';
+      loginBtn.classList.add('logged-in');
+    } else {
+      usageText.innerHTML = '<strong>' + data.count + ' / ' + data.limit + '</strong> games used today.' +
+        (data.tokensUsedToday ? ' (~' + data.tokensUsedToday + ' AI tokens used today, approx.)' : '');
+      loginBtn.textContent = 'Login';
+      loginBtn.classList.remove('logged-in');
+    }
+    document.querySelectorAll('.delete-btn').forEach(function(b) {
+      b.style.display = data.unlimited ? 'inline-block' : 'none';
+    });
+  } catch (e) {
+    document.getElementById('usage-text').textContent = 'Could not load usage.';
+  }
+}
+
+async function deleteGame(repoName, btnEl) {
+  if (!confirm('Delete this game permanently? This deletes the GitHub repo too — cannot be undone.')) return;
+  btnEl.disabled = true;
+  btnEl.textContent = '...';
+  try {
+    const res = await fetch(WORKER_URL + '/delete-game', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      body: JSON.stringify({ repoName: repoName })
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      const li = btnEl.closest('li');
+      if (li) li.remove();
+    } else {
+      alert('Delete failed: ' + (data.error || res.status));
+      btnEl.disabled = false;
+      btnEl.textContent = 'Delete';
+    }
+  } catch (e) {
+    alert('Delete failed: ' + e);
+    btnEl.disabled = false;
+    btnEl.textContent = 'Delete';
+  }
+}
+
+async function doLogin() {
+  if (getToken()) {
+    localStorage.removeItem(TOKEN_KEY);
+    document.getElementById('login-status').textContent = 'Logged out.';
+    refreshUsage();
+    return;
+  }
+  const password = prompt('Enter password:');
+  if (!password) return;
+  const statusEl = document.getElementById('login-status');
+  statusEl.textContent = 'Checking...';
+  try {
+    const res = await fetch(WORKER_URL + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+    if (res.ok && data.token) {
+      localStorage.setItem(TOKEN_KEY, data.token);
+      statusEl.textContent = 'Logged in.';
+      refreshUsage();
+    } else {
+      statusEl.textContent = data.error || 'Login failed.';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Login failed: ' + e;
+  }
+}
+
+async function submitIdea() {
+  const idea = document.getElementById('idea').value.trim();
+  if (!idea) return;
+  const btn = document.getElementById('go');
+  const status = document.getElementById('status');
+  btn.disabled = true;
+  status.textContent = 'Generating and deploying... this can take 30-90s. You can leave this page — a notification will confirm when it is done.';
+  try {
+    const res = await fetch(WORKER_URL + '/create', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      body: JSON.stringify({ idea })
+    });
+    const text = await res.text();
+    status.textContent = text;
+  } catch (e) {
+    status.textContent = 'Failed: ' + e;
+  }
+  btn.disabled = false;
+  refreshUsage();
+}
+
+refreshUsage();
+</script>
+</body>
+</html>
